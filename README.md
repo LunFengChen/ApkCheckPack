@@ -39,3 +39,10 @@ English Please look: ./README_EN.md
     ApkCheckPack.exe -hardcode true -f test.apk
 
 ![gui2](help.png)
+
+
+# 编译生成
+```shell
+chmod +x build_on_linux.sh
+./build_on_linux.sh
+```

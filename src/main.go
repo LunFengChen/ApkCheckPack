@@ -29,7 +29,12 @@ var (
 	// 扫描控制参数
 	ArgMaxSize      = flag.Int64("maxsize", 500, "单个文件最大扫描大小(MB)")
 	ArgRecursive    = flag.Bool("r", true, "是否递归扫描内嵌APK")
+	
+	// 重命名参数
+	ArgRename       = flag.Bool("rename", true, "是否重命名APK文件")
+	ArgDeleteOrig   = flag.Bool("delete", true, "重命名后是否删除原文件")
 )
+
 
 // 打印使用说明
 func printUsage() {
@@ -50,10 +55,15 @@ func printUsage() {
 	fmt.Println("  -maxsize   单个文件最大扫描大小(MB) (默认: 500)")
 	fmt.Println("  -r         递归扫描内嵌APK (默认: 开启)")
 	
+	fmt.Println("\n重命名功能:")
+	fmt.Println("  -rename    启用APK重命名功能 (默认: 开启)")
+	fmt.Println("  -delete    重命名后删除原文件 (默认: 不保留)")
+	
 	fmt.Println("\n示例:")
 	fmt.Println("  ApkCheckPack.exe -f test.apk")
-	fmt.Println("  ApkCheckPack.exe -f test.apk -hardcode")
-	fmt.Println("  ApkCheckPack.exe -f ./apks -r=false -maxsize 100")
+	fmt.Println("  ApkCheckPack.exe -f test.apk -rename")
+	fmt.Println("  ApkCheckPack.exe -f test.apk -rename -delete")
+	fmt.Println("  ApkCheckPack.exe -f ./apks -rename -hardcode")
 }
 
 func main() {
@@ -147,7 +157,7 @@ func scanAPKFile(filePath string) error {
 	// 扫描主APK
 	fmt.Printf("正在扫描APK文件: %s\n", filePath)
 
-	ScanAPKData(&apkReader.Reader)
+	ScanAPKDataWithPath(&apkReader.Reader, filePath)
 
 	// 如果启用递归扫描，扫描内嵌APK
 	if *ArgRecursive {
@@ -238,29 +248,49 @@ func scanSingleEmbeddedAPK(file *zip.File) error {
 
 // 将APK读取到内存，传入
 func ScanAPKData(apkReader *zip.Reader) error {
+	return ScanAPKDataWithPath(apkReader, "")
+}
+
+// 带文件路径的APK扫描函数
+func ScanAPKDataWithPath(apkReader *zip.Reader, filePath string) error {
 	//verifyApk(filePath) //20241230 临时取消签名验证 减小程序体积
 
-	// 检测加固特征
+	// 1. 首先提取并打印APK基本信息
+	var apkInfo *APKInfo
+	if filePath != "" {
+		apkInfo = ExtractAndPrintAPKInfo(filePath, apkReader)
+	}
+
+	// 2. 检测加固特征
 	PackByLibSo(apkReader)
 
-	// 根据参数控制安全检测
+	// 3. 根据参数控制安全检测
 	if *ArgCheckRoot || *ArgCheckEmu || *ArgCheckDebug || *ArgCheckProxy {
 		ScanAPKAnti(apkReader)
 	}
 	
-	// 执行SDK检测
+	// 4. 执行SDK检测
 	if *ArgCheckSDK {
 		SDKByLibSo(apkReader)
 	}
 
-	// 根据参数控制硬编码检测
+	// 5. 根据参数控制硬编码检测
 	if *ArgCheckHardcode {
 		ScanAPKHardCoded(apkReader)
 	}
 
-	// 根据参数控制证书检测
+	// 6. 根据参数控制证书检测
 	if *ArgCheckCert {
 		ScanAPKCertificate(apkReader)
+	}
+	
+	// 7. 如果启用重命名功能且有文件路径，执行重命名
+	if *ArgRename && apkInfo != nil {
+		packInfo := GetPackInfoFromResults()
+		err := RenameAPKFile(apkInfo, packInfo)
+		if err != nil {
+			fmt.Printf("重命名失败: %v\n", err)
+		}
 	}
 	
 	return nil
