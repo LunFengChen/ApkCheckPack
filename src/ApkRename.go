@@ -28,17 +28,25 @@ func ExtractAndPrintAPKInfo(apkPath string, apkReader *zip.Reader) *APKInfo {
 		FilePath: apkPath,
 	}
 
-	// 尝试使用aapt工具提取信息
-	if aaptInfo := extractWithAapt(apkPath); aaptInfo != nil {
-		info.PackageName = aaptInfo.PackageName
-		info.VersionName = aaptInfo.VersionName
-		info.VersionCode = aaptInfo.VersionCode
-		info.AppName = aaptInfo.AppName
+	// 优先使用zip解析AndroidManifest.xml（跨平台兼容）
+	if apkReader != nil {
+		parseManifestFromZip(apkReader, info)
+		// 尝试从strings.xml获取应用名
+		if info.AppName == "" {
+			parseStringsFromZip(apkReader, info)
+		}
 	}
 
-	// 如果aapt失败，使用zip解析AndroidManifest.xml
-	if info.PackageName == "" && apkReader != nil {
-		parseManifestFromZip(apkReader, info)
+	// 如果zip解析失败，尝试使用aapt工具
+	if info.PackageName == "" {
+		if aaptInfo := extractWithAapt(apkPath); aaptInfo != nil {
+			info.PackageName = aaptInfo.PackageName
+			info.VersionName = aaptInfo.VersionName
+			info.VersionCode = aaptInfo.VersionCode
+			if info.AppName == "" {
+				info.AppName = aaptInfo.AppName
+			}
+		}
 	}
 
 	// 如果应用名为空，使用文件名
@@ -115,16 +123,67 @@ func parseManifestFromZip(apkReader *zip.Reader, info *APKInfo) {
 
 			manifestStr := string(manifestData)
 			
-			if match := regexp.MustCompile(`package="([^"]+)"`).FindStringSubmatch(manifestStr); len(match) > 1 {
-				info.PackageName = match[1]
+			// 尝试多种模式匹配
+			patterns := map[string]*regexp.Regexp{
+				"package":     regexp.MustCompile(`package="([^"]+)"`),
+				"versionName": regexp.MustCompile(`android:versionName="([^"]+)"`),
+				"versionCode": regexp.MustCompile(`android:versionCode="([^"]+)"`),
+				"label":       regexp.MustCompile(`android:label="([^"]+)"`),
 			}
-			if match := regexp.MustCompile(`android:versionName="([^"]+)"`).FindStringSubmatch(manifestStr); len(match) > 1 {
-				info.VersionName = match[1]
-			}
-			if match := regexp.MustCompile(`android:versionCode="([^"]+)"`).FindStringSubmatch(manifestStr); len(match) > 1 {
-				info.VersionCode = match[1]
+			
+			for key, pattern := range patterns {
+				if match := pattern.FindStringSubmatch(manifestStr); len(match) > 1 {
+					switch key {
+					case "package":
+						info.PackageName = match[1]
+					case "versionName":
+						info.VersionName = match[1]
+					case "versionCode":
+						info.VersionCode = match[1]
+					case "label":
+						if info.AppName == "" && !strings.HasPrefix(match[1], "@") {
+							info.AppName = match[1]
+						}
+					}
+				}
 			}
 			break
+		}
+	}
+}
+
+// 从zip中解析strings.xml获取应用名
+func parseStringsFromZip(apkReader *zip.Reader, info *APKInfo) {
+	for _, file := range apkReader.File {
+		// 查找strings.xml文件
+		if strings.Contains(file.Name, "res/values") && strings.HasSuffix(file.Name, "strings.xml") {
+			stringsReader, err := file.Open()
+			if err != nil {
+				continue
+			}
+			
+			stringsData, err := io.ReadAll(stringsReader)
+			stringsReader.Close()
+			if err != nil {
+				continue
+			}
+
+			stringsStr := string(stringsData)
+			
+			// 查找app_name
+			patterns := []string{
+				`<string name="app_name">([^<]+)</string>`,
+				`<string name="app_title">([^<]+)</string>`,
+				`<string name="application_name">([^<]+)</string>`,
+				`<string name="title">([^<]+)</string>`,
+			}
+			
+			for _, pattern := range patterns {
+				if match := regexp.MustCompile(pattern).FindStringSubmatch(stringsStr); len(match) > 1 {
+					info.AppName = strings.TrimSpace(match[1])
+					return // 找到就返回
+				}
+			}
 		}
 	}
 }
@@ -143,7 +202,7 @@ func cleanString(s string) string {
 // 从加固检测结果中获取加固信息
 func GetPackInfoFromResults() string {
 	if len(allPackResults) == 0 {
-		return "NoPack"
+		return "无加固"
 	}
 	
 	// 从检测结果中提取加固厂商名称
@@ -169,7 +228,7 @@ func GetPackInfoFromResults() string {
 	}
 	
 	if len(packNames) == 0 {
-		return "NoPack"
+		return "无加固"
 	}
 	
 	// 将所有检测到的加固厂商用下划线连接
