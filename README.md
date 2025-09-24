@@ -42,7 +42,11 @@ English Please look: ./README_EN.md
 
 
 # 编译生成
+linux
 ```shell
 chmod +x build_on_linux.sh
 ./build_on_linux.sh
 ```
+
+win
+双击build_on_win.bat
